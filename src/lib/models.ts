@@ -63,7 +63,8 @@ export const BACKDROP_MODEL = {
     aspect_ratio: input.aspectRatio,
     resolution: "720p",
     batch_size: 1,
-    enhance_prompt: true,
+    // Soul's prompt enhancer leans towards portraits and tends to add people; keep the plate literal.
+    enhance_prompt: false,
   }),
 };
 

@@ -6,8 +6,9 @@ import { CANVAS } from "./models";
 /** Prompt for the backdrop plate: the requested scene with nobody in it. */
 export function buildBackdropPrompt(scene: string): string {
   return [
-    `Empty background plate for a talking-head presenter video: ${scene.trim()}.`,
-    "No people, no faces, no text, no logos. Photorealistic, natural lighting, eye-level camera, medium-shot framing with open space in the centre where a presenter will stand.",
+    `Architectural interior photograph of an unoccupied location: ${scene.trim()}.`,
+    "The space is completely empty: nobody is present, no people, no person, no figures, no mannequins, no portraits, no reflections of people, no text, no logos.",
+    "Photorealistic, natural lighting, eye-level camera at standing height, medium-shot framing with clear open floor space in the centre of the frame.",
   ].join(" ");
 }
 
