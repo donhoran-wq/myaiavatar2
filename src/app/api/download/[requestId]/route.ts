@@ -50,7 +50,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ requestId: str
     return error(502, { error: `The video host returned HTTP ${upstream.status}.`, code: "upstream" });
   }
 
-  const filename = `${mock ? "mock-" : "avatar-"}${requestId.slice(0, 8)}.mp4`;
+  const shortId = (mock ? requestId.slice("mock-".length) : requestId).slice(0, 8);
+  const filename = `${mock ? "mock-" : "avatar-"}${shortId}.mp4`;
   const headers = new Headers({
     "Content-Type": upstream.headers.get("content-type") || "video/mp4",
     "Content-Disposition": `attachment; filename="${filename}"`,

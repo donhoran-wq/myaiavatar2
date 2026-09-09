@@ -359,7 +359,7 @@ export function Studio({ takes, configured, model }: { takes: TakeCardData[]; co
                 onChange={(e) => setDialogue(e.target.value)}
                 rows={4}
                 maxLength={500}
-                placeholder="Hi, I'm Dr. Keyes. Welcome to our practice..."
+                placeholder="Hi, and welcome to our practice. Today I want to talk about..."
                 className="w-full rounded-md border border-border bg-panel-2 px-3 py-2 text-sm outline-none focus:border-accent"
               />
               <span className="mt-1 flex justify-between text-xs text-muted">
