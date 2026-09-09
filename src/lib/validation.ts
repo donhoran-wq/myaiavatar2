@@ -55,7 +55,7 @@ export function validateGenerateInput(body: unknown): ValidationResult {
 
   const rawDuration = b.duration === undefined || b.duration === "" ? model.defaultDuration : Number(b.duration);
   if (!Number.isInteger(rawDuration) || !model.durations.includes(rawDuration)) {
-    errors.duration = `Duration must be one of ${model.durations.join(", ")} seconds for ${model.label}.`;
+    errors.duration = `Duration must be one of ${model.durations.join(", ")} seconds for ${model.label} (the model's maximum is ${Math.max(...model.durations)} s).`;
   }
 
   const aspectRatio = str(b.aspectRatio) || "16:9";

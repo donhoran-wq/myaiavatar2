@@ -22,7 +22,8 @@ export const ANIMATION_MODELS: Record<string, AnimationModel> = {
     label: "Kling 3.0 Pro (native speech)",
     path: "kling-video/v3.0/pro/image-to-video",
     speech: true,
-    durations: [5, 8, 10],
+    // Kling 3.0 accepts integer durations from 3 to 15 s (verified against the API); 15 s is the hard cap.
+    durations: [5, 8, 10, 12, 15],
     defaultDuration: 5,
     body: ({ imageUrl, prompt, duration }) => ({ image_url: imageUrl, prompt, duration, sound: "on", cfg_scale: 0.5 }),
   },
