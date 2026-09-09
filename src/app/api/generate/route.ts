@@ -34,7 +34,7 @@ export async function POST(req: Request) {
   const input = result.value;
   const take = getTake(input.mediaId)!;
   const model = getAnimationModel(input.model);
-  const pipeline = { mediaId: take.id, scene: input.scene, dialogue: input.dialogue, duration: input.duration, aspectRatio: input.aspectRatio, model: model.id };
+  const pipeline = { mediaId: take.id, scene: input.scene, dialogue: input.dialogue, duration: input.duration, aspectRatio: input.aspectRatio, model: model.id, backdropPrompt: input.backdropPrompt };
   const submittedAt = new Date().toISOString();
 
   if (input.mock) {
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
       mock: true,
       model: `mock (would use ${BACKDROP_MODEL.path} then ${model.path})`,
       modelLabel: model.label,
-      prompt: buildBackdropPrompt(input.scene),
+      prompt: buildBackdropPrompt(input.scene, input.backdropPrompt ?? undefined),
       take: { id: take.id, label: take.label, outfit: take.outfit },
       pipeline,
       submittedAt,
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const prompt = buildBackdropPrompt(input.scene);
+    const prompt = buildBackdropPrompt(input.scene, input.backdropPrompt ?? undefined);
     const submitted = await submitRaw(BACKDROP_MODEL.path, BACKDROP_MODEL.body({ prompt, aspectRatio: input.aspectRatio }));
     if (!submitted?.request_id) {
       return error(502, { error: "Higgsfield accepted the backdrop request but did not return a request ID.", code: "upstream" });

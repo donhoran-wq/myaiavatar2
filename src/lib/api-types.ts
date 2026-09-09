@@ -12,6 +12,7 @@ export interface PipelineParams {
   duration: number;
   aspectRatio: "16:9" | "9:16";
   model: string;
+  backdropPrompt?: string | null;
 }
 
 export interface GenerateResponse {

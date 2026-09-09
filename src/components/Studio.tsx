@@ -124,6 +124,7 @@ export function Studio({
   const [outfitFilter, setOutfitFilter] = useState<string>("all");
   const [scene, setScene] = useState("");
   const [dialogue, setDialogue] = useState("");
+  const [backdropPrompt, setBackdropPrompt] = useState("");
   const [modelId, setModelId] = useState(defaultModel);
   const model = models.find((m) => m.id === modelId) ?? models[0];
   const [duration, setDuration] = useState<number>(model.defaultDuration);
@@ -312,7 +313,7 @@ export function Studio({
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: selected.id, scene, dialogue, duration: effectiveDuration, aspectRatio, model: model.id, mock }),
+        body: JSON.stringify({ mediaId: selected.id, scene, dialogue, duration: effectiveDuration, aspectRatio, model: model.id, backdropPrompt: backdropPrompt.trim() || undefined, mock }),
       });
       const body = (await res.json()) as GenerateResponse | ApiErrorResponse;
       if (!res.ok) {
@@ -500,6 +501,19 @@ export function Studio({
             </div>
             {!model.speech && <p className="mt-2 text-xs text-warning">This model does not generate speech. The dialogue is used for motion guidance only.</p>}
             {fieldErrors.duration && <p className="mt-2 text-xs text-danger">{fieldErrors.duration}</p>}
+
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-muted">Advanced: custom backdrop prompt</summary>
+              <textarea
+                value={backdropPrompt}
+                onChange={(e) => setBackdropPrompt(e.target.value)}
+                rows={3}
+                maxLength={800}
+                placeholder="Leave empty to use the built-in backdrop prompt. If set, this exact text is sent to the backdrop image model instead."
+                className="mt-2 w-full rounded-md border border-border bg-panel-2 px-3 py-2 text-xs outline-none focus:border-accent"
+              />
+              {fieldErrors.backdropPrompt && <p className="mt-1 text-xs text-danger">{fieldErrors.backdropPrompt}</p>}
+            </details>
           </div>
 
           <div className="rounded-xl border border-border bg-panel p-4">

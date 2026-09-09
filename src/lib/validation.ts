@@ -18,6 +18,7 @@ export interface GenerateInput {
   duration: number;
   aspectRatio: AspectRatio;
   model: string;
+  backdropPrompt: string | null;
   mock: boolean;
 }
 
@@ -60,11 +61,14 @@ export function validateGenerateInput(body: unknown): ValidationResult {
   const aspectRatio = str(b.aspectRatio) || "16:9";
   if (!(ASPECT_RATIOS as readonly string[]).includes(aspectRatio)) errors.aspectRatio = `Aspect ratio must be one of ${ASPECT_RATIOS.join(", ")}.`;
 
+  const backdropPrompt = str(b.backdropPrompt);
+  if (backdropPrompt.length > 800) errors.backdropPrompt = "Custom backdrop prompt must be 800 characters or fewer.";
+
   const mock = b.mock === true;
 
   if (Object.keys(errors).length) return { ok: false, errors };
   return {
     ok: true,
-    value: { mediaId, scene, dialogue, duration: rawDuration, aspectRatio: aspectRatio as AspectRatio, model: model.id, mock },
+    value: { mediaId, scene, dialogue, duration: rawDuration, aspectRatio: aspectRatio as AspectRatio, model: model.id, backdropPrompt: backdropPrompt || null, mock },
   };
 }

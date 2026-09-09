@@ -4,11 +4,15 @@ import type { Take } from "./takes";
 import { CANVAS } from "./models";
 
 /** Prompt for the backdrop plate: the requested scene with nobody in it. */
-export function buildBackdropPrompt(scene: string): string {
+export function buildBackdropPrompt(scene: string, override?: string): string {
+  if (override && override.trim()) return override.trim();
+  // Soul is a portrait-first model: mentioning people (even to exclude them)
+  // makes it add people. Describe the vacant room positively instead.
+  // Tested phrasings: "real estate listing photograph of a vacant ..." and
+  // "empty room, interior architecture photography ..." both yield clean plates.
   return [
-    `Architectural interior photograph of an unoccupied location: ${scene.trim()}.`,
-    "The space is completely empty: nobody is present, no people, no person, no figures, no mannequins, no portraits, no reflections of people, no text, no logos.",
-    "Photorealistic, natural lighting, eye-level camera at standing height, medium-shot framing with clear open floor space in the centre of the frame.",
+    `Real estate listing photograph of a vacant ${scene.trim()}.`,
+    "Empty room, interior architecture photography, wide angle lens, symmetrical composition, still life of furniture and plants, plain unmarked walls, daylight, clean floor with open space in the centre of the frame, photorealistic, sharp focus.",
   ].join(" ");
 }
 
