@@ -1,11 +1,7 @@
 import { getTake } from "./takes";
+import { ANIMATION_MODELS, DEFAULT_ANIMATION_MODEL, getAnimationModel } from "./models";
 
-export const DURATIONS = ["4", "6", "8"] as const;
-export const RESOLUTIONS = ["720", "1080"] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16"] as const;
-
-export type Duration = (typeof DURATIONS)[number];
-export type Resolution = (typeof RESOLUTIONS)[number];
 export type AspectRatio = (typeof ASPECT_RATIOS)[number];
 
 export const LIMITS = {
@@ -19,9 +15,9 @@ export interface GenerateInput {
   mediaId: string;
   scene: string;
   dialogue: string;
-  duration: Duration;
-  resolution: Resolution;
+  duration: number;
   aspectRatio: AspectRatio;
+  model: string;
   mock: boolean;
 }
 
@@ -52,11 +48,14 @@ export function validateGenerateInput(body: unknown): ValidationResult {
   if (dialogue.length < LIMITS.dialogueMin) errors.dialogue = "Enter the dialogue the avatar should speak.";
   else if (dialogue.length > LIMITS.dialogueMax) errors.dialogue = `Dialogue must be ${LIMITS.dialogueMax} characters or fewer.`;
 
-  const duration = str(b.duration) || "8";
-  if (!(DURATIONS as readonly string[]).includes(duration)) errors.duration = `Duration must be one of ${DURATIONS.join(", ")} seconds.`;
+  const modelId = str(b.model) || DEFAULT_ANIMATION_MODEL;
+  if (!(modelId in ANIMATION_MODELS)) errors.model = `Model must be one of ${Object.keys(ANIMATION_MODELS).join(", ")}.`;
+  const model = getAnimationModel(modelId);
 
-  const resolution = str(b.resolution) || "720";
-  if (!(RESOLUTIONS as readonly string[]).includes(resolution)) errors.resolution = `Resolution must be one of ${RESOLUTIONS.join(", ")}.`;
+  const rawDuration = b.duration === undefined || b.duration === "" ? model.defaultDuration : Number(b.duration);
+  if (!Number.isInteger(rawDuration) || !model.durations.includes(rawDuration)) {
+    errors.duration = `Duration must be one of ${model.durations.join(", ")} seconds for ${model.label}.`;
+  }
 
   const aspectRatio = str(b.aspectRatio) || "16:9";
   if (!(ASPECT_RATIOS as readonly string[]).includes(aspectRatio)) errors.aspectRatio = `Aspect ratio must be one of ${ASPECT_RATIOS.join(", ")}.`;
@@ -66,14 +65,6 @@ export function validateGenerateInput(body: unknown): ValidationResult {
   if (Object.keys(errors).length) return { ok: false, errors };
   return {
     ok: true,
-    value: {
-      mediaId,
-      scene,
-      dialogue,
-      duration: duration as Duration,
-      resolution: resolution as Resolution,
-      aspectRatio: aspectRatio as AspectRatio,
-      mock,
-    },
+    value: { mediaId, scene, dialogue, duration: rawDuration, aspectRatio: aspectRatio as AspectRatio, model: model.id, mock },
   };
 }

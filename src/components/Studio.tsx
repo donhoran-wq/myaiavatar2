@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ApiErrorResponse, GenerateResponse, JobStatus, StatusResponse } from "@/lib/api-types";
+import type { ApiErrorResponse, EstimateResponse, GenerateResponse, JobStatus, PipelineParams, Stage, StatusResponse } from "@/lib/api-types";
 
 export interface TakeCardData {
   id: string;
@@ -16,24 +16,42 @@ export interface TakeCardData {
   durationSeconds: number;
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+  path: string;
+  speech: boolean;
+  durations: number[];
+  defaultDuration: number;
+}
+
 interface Job {
   requestId: string;
   status: JobStatus;
+  stage: Stage;
   mock: boolean;
   model: string;
+  modelLabel: string;
   prompt: string;
   takeLabel: string;
+  pipeline: PipelineParams;
   submittedAt: string;
   videoUrl: string | null;
+  imageUrl: string | null;
+  compositeUrl: string | null;
+  backdropUrl: string | null;
   downloadUrl: string | null;
   error: string | null;
   lastChecked: string | null;
   polls: number;
+  /** Set while the client is calling /api/generate/animate between stages. */
+  advancing?: boolean;
 }
 
 const STORAGE_KEY = "avatar-studio:job";
 const POLL_MS = 5000;
-const POLL_MAX_MS = 20 * 60 * 1000;
+const POLL_MAX_MS = 25 * 60 * 1000;
+const TERMINAL: JobStatus[] = ["completed", "failed", "nsfw", "canceled"];
 
 const STATUS_LABEL: Record<JobStatus, string> = {
   queued: "Queued",
@@ -62,20 +80,43 @@ function saveJob(job: Job | null) {
   }
 }
 
+function jobFromGenerate(g: GenerateResponse, prev?: Job | null): Job {
+  return {
+    requestId: g.requestId,
+    status: g.status,
+    stage: g.stage,
+    mock: g.mock,
+    model: g.model,
+    modelLabel: g.modelLabel,
+    prompt: g.prompt,
+    takeLabel: g.take.label,
+    pipeline: g.pipeline,
+    submittedAt: g.submittedAt,
+    videoUrl: null,
+    imageUrl: null,
+    compositeUrl: g.compositeUrl ?? null,
+    backdropUrl: prev?.imageUrl ?? null,
+    downloadUrl: null,
+    error: null,
+    lastChecked: null,
+    polls: 0,
+  };
+}
+
 export function Studio({
   takes,
+  models,
+  defaultModel,
   configured,
-  model,
   modelAvailable,
-  videoModels,
-  totalModels,
+  backdropModel,
 }: {
   takes: TakeCardData[];
+  models: ModelOption[];
+  defaultModel: string;
   configured: boolean;
-  model: string;
   modelAvailable: boolean | null;
-  videoModels: string[];
-  totalModels: number | null;
+  backdropModel: string;
 }) {
   const realDisabled = !configured || modelAvailable === false;
   const [selectedId, setSelectedId] = useState<string>(takes[0]?.id ?? "");
@@ -83,8 +124,9 @@ export function Studio({
   const [outfitFilter, setOutfitFilter] = useState<string>("all");
   const [scene, setScene] = useState("");
   const [dialogue, setDialogue] = useState("");
-  const [duration, setDuration] = useState<"4" | "6" | "8">("8");
-  const [resolution, setResolution] = useState<"720" | "1080">("720");
+  const [modelId, setModelId] = useState(defaultModel);
+  const model = models.find((m) => m.id === modelId) ?? models[0];
+  const [duration, setDuration] = useState<number>(model.defaultDuration);
   const [aspectRatio, setAspectRatio] = useState<"16:9" | "9:16">("16:9");
   const [dryRun, setDryRun] = useState(realDisabled);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -92,21 +134,25 @@ export function Studio({
   const [submitting, setSubmitting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmAck, setConfirmAck] = useState(false);
+  const [estimate, setEstimate] = useState<EstimateResponse | null>(null);
+  const [estimateError, setEstimateError] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const pollTimer = useRef<number | null>(null);
+  const advancingRef = useRef(false);
 
   useEffect(() => {
     // Rehydrate the last job from localStorage after mount (cannot be a lazy
     // initializer because the server render has no localStorage).
     const saved = loadJob();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (saved) setJob(saved);
   }, []);
 
   useEffect(() => {
     saveJob(job);
   }, [job]);
+
+  const effectiveDuration = model.durations.includes(duration) ? duration : model.defaultDuration;
 
   const presenters = useMemo(() => {
     const m = new Map<string, string>();
@@ -120,14 +166,10 @@ export function Studio({
     return [...set];
   }, [takes, presenterFilter]);
 
-  // If the presenter filter changes and the chosen outfit no longer applies, fall back to "all".
   const effectiveOutfit = outfitFilter !== "all" && !outfits.includes(outfitFilter) ? "all" : outfitFilter;
 
   const visibleTakes = useMemo(
-    () =>
-      takes.filter(
-        (t) => (presenterFilter === "all" || t.presenter === presenterFilter) && (effectiveOutfit === "all" || t.outfit === effectiveOutfit),
-      ),
+    () => takes.filter((t) => (presenterFilter === "all" || t.presenter === presenterFilter) && (effectiveOutfit === "all" || t.outfit === effectiveOutfit)),
     [takes, presenterFilter, effectiveOutfit],
   );
 
@@ -147,29 +189,58 @@ export function Studio({
     return body as StatusResponse;
   }, []);
 
+  const applyStatus = useCallback((s: StatusResponse) => {
+    setJob((prev) =>
+      prev && prev.requestId === s.requestId
+        ? { ...prev, status: s.status, videoUrl: s.videoUrl, imageUrl: s.imageUrl, downloadUrl: s.downloadUrl, error: s.error, lastChecked: s.checkedAt, polls: prev.polls + 1 }
+        : prev,
+    );
+  }, []);
+
+  /** Stage 2: backdrop finished → composite + submit the video model. */
+  const advance = useCallback(async (current: Job) => {
+    if (advancingRef.current) return;
+    advancingRef.current = true;
+    setJob((prev) => (prev && prev.requestId === current.requestId ? { ...prev, advancing: true } : prev));
+    try {
+      const res = await fetch("/api/generate/animate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backdropRequestId: current.requestId, ...current.pipeline }),
+      });
+      const body = (await res.json()) as GenerateResponse | ApiErrorResponse;
+      if (!res.ok) throw new Error((body as ApiErrorResponse).error || `Could not start the video stage (HTTP ${res.status}).`);
+      const next = jobFromGenerate(body as GenerateResponse, current);
+      setJob(next);
+      setPollError(null);
+    } catch (err) {
+      setJob((prev) => (prev && prev.requestId === current.requestId ? { ...prev, advancing: false, error: err instanceof Error ? err.message : "Could not start the video stage." } : prev));
+    } finally {
+      advancingRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     stopPolling();
     if (!job) return;
-    const terminal = ["completed", "failed", "nsfw", "canceled"].includes(job.status);
-    if (terminal) return;
+    if (job.advancing) return;
+    if (TERMINAL.includes(job.status)) {
+      if (job.stage === "backdrop" && job.status === "completed" && job.imageUrl && !job.error) void advance(job);
+      return;
+    }
     const startedAt = Date.parse(job.submittedAt);
     let cancelled = false;
-
     const tick = async () => {
       if (cancelled) return;
       if (Date.now() - startedAt > POLL_MAX_MS) {
-        setPollError("Stopped polling after 20 minutes. Use “Check now” to refresh manually.");
+        setPollError("Stopped polling after 25 minutes. Use “Check now” to refresh manually.");
         return;
       }
       try {
         const s = await pollOnce(job.requestId);
         if (cancelled) return;
         setPollError(null);
-        setJob((prev) =>
-          prev && prev.requestId === s.requestId
-            ? { ...prev, status: s.status, videoUrl: s.videoUrl, downloadUrl: s.downloadUrl, error: s.error, lastChecked: s.checkedAt, polls: prev.polls + 1 }
-            : prev,
-        );
+        applyStatus(s);
         if (!s.terminal) pollTimer.current = window.setTimeout(tick, POLL_MS);
       } catch (err) {
         if (cancelled) return;
@@ -183,14 +254,14 @@ export function Studio({
       stopPolling();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.requestId, job?.status]);
+  }, [job?.requestId, job?.status, job?.advancing, job?.imageUrl]);
 
   const checkNow = async () => {
     if (!job) return;
     try {
       const s = await pollOnce(job.requestId);
       setPollError(null);
-      setJob((prev) => (prev ? { ...prev, status: s.status, videoUrl: s.videoUrl, downloadUrl: s.downloadUrl, error: s.error, lastChecked: s.checkedAt, polls: prev.polls + 1 } : prev));
+      applyStatus(s);
     } catch (err) {
       setPollError(err instanceof Error ? err.message : "Status check failed.");
     }
@@ -207,6 +278,19 @@ export function Studio({
     return Object.keys(errs).length === 0;
   };
 
+  const loadEstimate = async () => {
+    setEstimate(null);
+    setEstimateError(null);
+    try {
+      const res = await fetch(`/api/estimate?model=${encodeURIComponent(model.id)}&duration=${effectiveDuration}&aspectRatio=${encodeURIComponent(aspectRatio)}`, { cache: "no-store" });
+      const body = (await res.json()) as EstimateResponse | ApiErrorResponse;
+      if (!res.ok) throw new Error((body as ApiErrorResponse).error || "Estimate failed.");
+      setEstimate(body as EstimateResponse);
+    } catch (err) {
+      setEstimateError(err instanceof Error ? err.message : "Estimate failed.");
+    }
+  };
+
   const onGenerateClick = () => {
     setFormError(null);
     if (!validateLocally()) return;
@@ -215,6 +299,7 @@ export function Studio({
     } else {
       setConfirmAck(false);
       setConfirmOpen(true);
+      void loadEstimate();
     }
   };
 
@@ -227,7 +312,7 @@ export function Studio({
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaId: selected.id, scene, dialogue, duration, resolution, aspectRatio, mock }),
+        body: JSON.stringify({ mediaId: selected.id, scene, dialogue, duration: effectiveDuration, aspectRatio, model: model.id, mock }),
       });
       const body = (await res.json()) as GenerateResponse | ApiErrorResponse;
       if (!res.ok) {
@@ -236,21 +321,7 @@ export function Studio({
         setFormError(e.error || `Submission failed (HTTP ${res.status}).`);
         return;
       }
-      const g = body as GenerateResponse;
-      setJob({
-        requestId: g.requestId,
-        status: g.status,
-        mock: g.mock,
-        model: g.model,
-        prompt: g.prompt,
-        takeLabel: g.take.label,
-        submittedAt: g.submittedAt,
-        videoUrl: null,
-        downloadUrl: null,
-        error: null,
-        lastChecked: null,
-        polls: 0,
-      });
+      setJob(jobFromGenerate(body as GenerateResponse));
       setConfirmOpen(false);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Network error while submitting.");
@@ -265,7 +336,7 @@ export function Studio({
     setPollError(null);
   };
 
-  const busy = job !== null && !["completed", "failed", "nsfw", "canceled"].includes(job.status);
+  const busy = job !== null && !(TERMINAL.includes(job.status) && (job.stage !== "backdrop" || job.status !== "completed" || !!job.error));
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -283,8 +354,8 @@ export function Studio({
             <span className={`h-1.5 w-1.5 rounded-full ${!configured ? "bg-warning" : modelAvailable === false ? "bg-danger" : "bg-success"}`} />
             {!configured ? "Higgsfield credentials missing" : modelAvailable === false ? "API connected · model not enabled" : "Higgsfield API connected"}
           </span>
-          <span className="rounded-full border border-border px-2.5 py-1 font-mono text-muted" title="Model path">
-            {model}
+          <span className="rounded-full border border-border px-2.5 py-1 font-mono text-muted" title="Video model path">
+            {model.path}
           </span>
         </div>
       </header>
@@ -296,23 +367,11 @@ export function Studio({
       )}
       {configured && modelAvailable === false && (
         <div className="mb-6 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-          <p className="font-medium">
-            The model <code className="font-mono">{model}</code> is not enabled for this Higgsfield API key.
-          </p>
-          <p className="mt-1 text-danger/90">
-            The account catalog lists {totalModels ?? 0} model{totalModels === 1 ? "" : "s"} and {videoModels.length} video model{videoModels.length === 1 ? "" : "s"}
-            {videoModels.length > 0 ? `: ${videoModels.join(", ")}` : ""}. Real generations are disabled until Higgsfield enables a video model for this key (or <code className="font-mono">HIGGSFIELD_MODEL</code> is set to an available one). Dry-run mode still works.
-          </p>
-        </div>
-      )}
-      {configured && modelAvailable === null && (
-        <div className="mb-6 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
-          Could not read the account model catalog just now, so model availability is unverified. Submissions will still be validated by Higgsfield.
+          The video model <code className="font-mono">{model.path}</code> or the backdrop model <code className="font-mono">{backdropModel}</code> is not enabled for this Higgsfield API key. Real generations are disabled. Check <code className="font-mono">/api/health</code>.
         </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-        {/* Takes */}
         <section className="rounded-xl border border-border bg-panel p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">1. Choose a take</h2>
@@ -366,7 +425,6 @@ export function Studio({
           )}
         </section>
 
-        {/* Form */}
         <section className="flex flex-col gap-4">
           <div className="rounded-xl border border-border bg-panel p-4">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">2. Scene &amp; dialogue</h2>
@@ -403,20 +461,33 @@ export function Studio({
               </span>
             </label>
 
-            <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+            <div className="mt-3 grid grid-cols-[2fr_1fr_1fr] gap-2 text-xs">
               <label className="flex flex-col gap-1">
-                <span className="text-muted">Duration</span>
-                <select value={duration} onChange={(e) => setDuration(e.target.value as "4" | "6" | "8")} className="rounded-md border border-border bg-panel-2 px-2 py-1.5">
-                  <option value="4">4 s</option>
-                  <option value="6">6 s</option>
-                  <option value="8">8 s</option>
+                <span className="text-muted">Video model</span>
+                <select
+                  value={model.id}
+                  onChange={(e) => {
+                    const m = models.find((x) => x.id === e.target.value);
+                    setModelId(e.target.value);
+                    if (m) setDuration(m.defaultDuration);
+                  }}
+                  className="rounded-md border border-border bg-panel-2 px-2 py-1.5"
+                >
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-muted">Resolution</span>
-                <select value={resolution} onChange={(e) => setResolution(e.target.value as "720" | "1080")} className="rounded-md border border-border bg-panel-2 px-2 py-1.5">
-                  <option value="720">720p</option>
-                  <option value="1080">1080p</option>
+                <span className="text-muted">Duration</span>
+                <select value={effectiveDuration} onChange={(e) => setDuration(Number(e.target.value))} className="rounded-md border border-border bg-panel-2 px-2 py-1.5">
+                  {model.durations.map((d) => (
+                    <option key={d} value={d}>
+                      {d} s
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="flex flex-col gap-1">
@@ -427,6 +498,8 @@ export function Studio({
                 </select>
               </label>
             </div>
+            {!model.speech && <p className="mt-2 text-xs text-warning">This model does not generate speech. The dialogue is used for motion guidance only.</p>}
+            {fieldErrors.duration && <p className="mt-2 text-xs text-danger">{fieldErrors.duration}</p>}
           </div>
 
           <div className="rounded-xl border border-border bg-panel p-4">
@@ -441,7 +514,7 @@ export function Studio({
             </label>
 
             <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-              Real generations consume Higgsfield credits. You will be asked to confirm before anything is submitted.
+              Real generations consume Higgsfield credits (a backdrop image plus one video). You will see the estimated cost and be asked to confirm before anything is submitted.
             </div>
 
             {formError && <p className="mt-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{formError}</p>}
@@ -456,7 +529,7 @@ export function Studio({
             </button>
           </div>
 
-          <JobPanel job={job} pollError={pollError} onCheckNow={checkNow} onClear={clearJob} />
+          <JobPanel job={job} pollError={pollError} onCheckNow={checkNow} onClear={clearJob} onRetryAdvance={() => job && void advance({ ...job, error: null })} />
         </section>
       </div>
 
@@ -467,19 +540,31 @@ export function Studio({
               Submit to Higgsfield?
             </h3>
             <p className="mt-2 text-sm text-muted">
-              This submits a real generation with model <span className="font-mono text-fg">{model}</span>. Higgsfield charges credits for completed generations. Failed or moderated requests are not charged.
+              This runs two real generations: a backdrop image (<span className="font-mono text-fg">{backdropModel}</span>) and the video (<span className="font-mono text-fg">{model.path}</span>). Higgsfield charges credits for completed generations; failed or moderated requests are not charged.
             </p>
             <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
               <dt className="text-muted">Take</dt>
               <dd>
                 {selected.label} · {selected.outfit}
               </dd>
-              <dt className="text-muted">Duration</dt>
+              <dt className="text-muted">Video</dt>
               <dd>
-                {duration} s · {resolution}p · {aspectRatio}
+                {model.label} · {effectiveDuration} s · {aspectRatio}
               </dd>
               <dt className="text-muted">Dialogue</dt>
               <dd className="line-clamp-3">{dialogue}</dd>
+              <dt className="text-muted">Estimated cost</dt>
+              <dd>
+                {estimate ? (
+                  <span>
+                    <span className="font-semibold text-warning">{estimate.totalCredits} credits</span> (≈ ${estimate.totalUsd}) — video {estimate.animationCredits} + backdrop {estimate.backdropCredits}
+                  </span>
+                ) : estimateError ? (
+                  <span className="text-danger">{estimateError}</span>
+                ) : (
+                  <span className="text-muted">Fetching estimate…</span>
+                )}
+              </dd>
             </dl>
             <label className="mt-4 flex cursor-pointer items-start gap-2 text-sm">
               <input type="checkbox" checked={confirmAck} onChange={(e) => setConfirmAck(e.target.checked)} className="mt-0.5" />
@@ -529,9 +614,7 @@ function TakeCard({ take, selected, onSelect }: { take: TakeCardData; selected: 
       onMouseLeave={stop}
       onFocus={play}
       onBlur={stop}
-      className={`group relative overflow-hidden rounded-lg border text-left transition ${
-        selected ? "border-accent ring-2 ring-accent/60" : "border-border hover:border-muted"
-      }`}
+      className={`group relative overflow-hidden rounded-lg border text-left transition ${selected ? "border-accent ring-2 ring-accent/60" : "border-border hover:border-muted"}`}
     >
       <div className="relative aspect-video bg-black">
         <video ref={ref} className="h-full w-full object-cover" muted playsInline loop preload="none" poster={take.posterUrl} src={take.videoUrl} aria-hidden="true" />
@@ -550,7 +633,19 @@ function TakeCard({ take, selected, onSelect }: { take: TakeCardData; selected: 
   );
 }
 
-function JobPanel({ job, pollError, onCheckNow, onClear }: { job: Job | null; pollError: string | null; onCheckNow: () => void; onClear: () => void }) {
+function JobPanel({
+  job,
+  pollError,
+  onCheckNow,
+  onClear,
+  onRetryAdvance,
+}: {
+  job: Job | null;
+  pollError: string | null;
+  onCheckNow: () => void;
+  onClear: () => void;
+  onRetryAdvance: () => void;
+}) {
   if (!job) {
     return (
       <div className="rounded-xl border border-dashed border-border bg-panel/50 p-4 text-sm text-muted">
@@ -559,9 +654,19 @@ function JobPanel({ job, pollError, onCheckNow, onClear }: { job: Job | null; po
       </div>
     );
   }
-  const terminal = ["completed", "failed", "nsfw", "canceled"].includes(job.status);
-  const ok = job.status === "completed" && job.videoUrl;
-  const step = job.status === "queued" ? 1 : job.status === "in_progress" ? 2 : 3;
+  const terminal = TERMINAL.includes(job.status);
+  const videoDone = job.status === "completed" && !!job.videoUrl;
+  const failed = terminal && job.status !== "completed";
+  const stageFailed = !!job.error && !job.advancing;
+  // Steps: 1 backdrop, 2 composite, 3 video, 4 done (mock collapses to 3 → done)
+  let step: number;
+  if (job.stage === "mock") step = job.status === "queued" ? 1 : job.status === "in_progress" ? 3 : 4;
+  else if (job.stage === "backdrop") step = job.advancing ? 2 : job.status === "completed" && job.imageUrl ? 2 : 1;
+  else step = videoDone ? 4 : 3;
+  const steps = job.stage === "mock" ? ["Queued", "Mock", "Generating", "Done"] : ["Backdrop", "Composite", "Video", "Done"];
+  const stageLabel = job.stage === "mock" ? "Mock run" : job.stage === "backdrop" ? (job.advancing ? "Compositing presenter over backdrop…" : "Generating backdrop image") : "Generating video";
+  const allDone = job.stage !== "backdrop" && videoDone;
+
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -569,29 +674,31 @@ function JobPanel({ job, pollError, onCheckNow, onClear }: { job: Job | null; po
         {job.mock && <span className="rounded-full border border-warning/50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning">Mock · no credits used</span>}
       </div>
 
-      <div className="mb-3 flex items-center gap-2">
-        {["Queued", "Generating", "Done"].map((label, i) => {
+      <div className="mb-3 flex items-center gap-1.5">
+        {steps.map((label, i) => {
           const n = i + 1;
-          const active = n === step && !terminal;
-          const done = n < step || (n === step && terminal);
-          const failed = terminal && !ok && n === 3;
+          const done = allDone || n < step;
+          const active = !allDone && n === step && !failed && !stageFailed;
+          const broken = (failed || stageFailed) && n === step;
           return (
-            <div key={label} className="flex flex-1 items-center gap-2">
+            <div key={label} className="flex flex-1 items-center gap-1.5">
               <span
                 className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
-                  failed ? "bg-danger text-white" : done ? "bg-success text-black" : active ? "bg-accent text-white pulse-ring" : "bg-panel-2 text-muted"
+                  broken ? "bg-danger text-white" : done ? "bg-success text-black" : active ? "bg-accent text-white pulse-ring" : "bg-panel-2 text-muted"
                 }`}
               >
                 {n}
               </span>
               <span className={`text-xs ${active || done ? "text-fg" : "text-muted"}`}>{label}</span>
-              {n < 3 && <span className="mx-1 h-px flex-1 bg-border" />}
+              {n < steps.length && <span className="mx-1 h-px flex-1 bg-border" />}
             </div>
           );
         })}
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+        <dt className="text-muted">Stage</dt>
+        <dd>{stageLabel}</dd>
         <dt className="text-muted">Status</dt>
         <dd className={job.status === "completed" ? "text-success" : terminal ? "text-danger" : "text-accent"}>{STATUS_LABEL[job.status]}</dd>
         <dt className="text-muted">Request</dt>
@@ -611,13 +718,29 @@ function JobPanel({ job, pollError, onCheckNow, onClear }: { job: Job | null; po
       {pollError && <p className="mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">{pollError}</p>}
       {job.error && <p className="mt-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{job.error}</p>}
 
-      {ok && (
+      {(job.backdropUrl || job.compositeUrl || (job.stage === "backdrop" && job.imageUrl)) && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {(job.backdropUrl || job.imageUrl) && (
+            <figure>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={job.backdropUrl ?? job.imageUrl ?? ""} alt="Generated backdrop" className="aspect-video w-full rounded-md object-cover" />
+              <figcaption className="mt-1 text-[10px] text-muted">Backdrop</figcaption>
+            </figure>
+          )}
+          {job.compositeUrl && (
+            <figure>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={job.compositeUrl} alt="Presenter composited over backdrop" className="aspect-video w-full rounded-md object-cover" />
+              <figcaption className="mt-1 text-[10px] text-muted">Frame sent to the video model</figcaption>
+            </figure>
+          )}
+        </div>
+      )}
+
+      {allDone && (
         <div className="mt-3">
           <video className="aspect-video w-full rounded-md bg-black" controls playsInline src={job.videoUrl ?? undefined} />
-          <a
-            href={job.downloadUrl ?? "#"}
-            className="mt-3 inline-flex w-full items-center justify-center rounded-md bg-success px-4 py-2.5 text-sm font-semibold text-black hover:brightness-110"
-          >
+          <a href={job.downloadUrl ?? "#"} className="mt-3 inline-flex w-full items-center justify-center rounded-md bg-success px-4 py-2.5 text-sm font-semibold text-black hover:brightness-110">
             Download MP4
           </a>
         </div>
@@ -632,6 +755,11 @@ function JobPanel({ job, pollError, onCheckNow, onClear }: { job: Job | null; po
         {!terminal && (
           <button type="button" onClick={onCheckNow} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-panel-2">
             Check now
+          </button>
+        )}
+        {job.stage === "backdrop" && job.status === "completed" && job.error && (
+          <button type="button" onClick={onRetryAdvance} className="rounded-md border border-accent px-3 py-1.5 text-xs text-accent hover:bg-panel-2">
+            Retry video stage
           </button>
         )}
         <button type="button" onClick={onClear} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-panel-2">

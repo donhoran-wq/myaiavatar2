@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { validateGenerateInput } from "@/lib/validation";
 import { getTake } from "@/lib/takes";
-import { buildPrompt } from "@/lib/prompt";
-import { HiggsfieldError, getModelPath, isConfigured, submitGeneration } from "@/lib/higgsfield";
+import { buildBackdropPrompt } from "@/lib/pipeline";
+import { BACKDROP_MODEL, getAnimationModel } from "@/lib/models";
+import { HiggsfieldError, isConfigured, submitRaw } from "@/lib/higgsfield";
 import { makeMockRequestId } from "@/lib/mock";
 import type { ApiErrorResponse, GenerateResponse } from "@/lib/api-types";
 
@@ -13,6 +14,11 @@ function error(status: number, body: ApiErrorResponse) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
+/**
+ * Stage 1 of a generation. Validates the request and, for real runs, submits
+ * the backdrop (scene plate) image request. The client polls it and then calls
+ * /api/generate/animate to composite the presenter and start the video.
+ */
 export async function POST(req: Request) {
   let json: unknown;
   try {
@@ -27,18 +33,22 @@ export async function POST(req: Request) {
   }
   const input = result.value;
   const take = getTake(input.mediaId)!;
-  const prompt = buildPrompt(take, input.scene, input.dialogue);
-  const model = getModelPath();
+  const model = getAnimationModel(input.model);
+  const pipeline = { mediaId: take.id, scene: input.scene, dialogue: input.dialogue, duration: input.duration, aspectRatio: input.aspectRatio, model: model.id };
+  const submittedAt = new Date().toISOString();
 
   if (input.mock) {
     const body: GenerateResponse = {
       requestId: makeMockRequestId(take.id),
       status: "queued",
+      stage: "mock",
       mock: true,
-      model: `mock (would use ${model})`,
-      prompt,
+      model: `mock (would use ${BACKDROP_MODEL.path} then ${model.path})`,
+      modelLabel: model.label,
+      prompt: buildBackdropPrompt(input.scene),
       take: { id: take.id, label: take.label, outfit: take.outfit },
-      submittedAt: new Date().toISOString(),
+      pipeline,
+      submittedAt,
     };
     return NextResponse.json(body, { status: 202, headers: { "Cache-Control": "no-store" } });
   }
@@ -52,32 +62,27 @@ export async function POST(req: Request) {
   }
 
   try {
-    const submitted = await submitGeneration({
-      prompt,
-      image_urls: [take.posterUrl],
-      duration: input.duration,
-      resolution: input.resolution,
-      aspect_ratio: input.aspectRatio,
-      generate_audio: true,
-    });
+    const prompt = buildBackdropPrompt(input.scene);
+    const submitted = await submitRaw(BACKDROP_MODEL.path, BACKDROP_MODEL.body({ prompt, aspectRatio: input.aspectRatio }));
     if (!submitted?.request_id) {
-      return error(502, { error: "Higgsfield accepted the request but did not return a request ID.", code: "upstream" });
+      return error(502, { error: "Higgsfield accepted the backdrop request but did not return a request ID.", code: "upstream" });
     }
     const body: GenerateResponse = {
       requestId: submitted.request_id,
       status: submitted.status ?? "queued",
+      stage: "backdrop",
       mock: false,
-      model,
+      model: BACKDROP_MODEL.path,
+      modelLabel: BACKDROP_MODEL.label,
       prompt,
       take: { id: take.id, label: take.label, outfit: take.outfit },
-      submittedAt: new Date().toISOString(),
+      pipeline,
+      submittedAt,
     };
     return NextResponse.json(body, { status: 202, headers: { "Cache-Control": "no-store" } });
   } catch (err) {
-    if (err instanceof HiggsfieldError) {
-      return error(err.httpStatus, { error: err.message, code: err.code });
-    }
+    if (err instanceof HiggsfieldError) return error(err.httpStatus, { error: err.message, code: err.code });
     console.error("generate: unexpected error", err instanceof Error ? err.message : err);
-    return error(500, { error: "Unexpected server error while submitting the generation.", code: "internal" });
+    return error(500, { error: "Unexpected server error while submitting the backdrop generation.", code: "internal" });
   }
 }

@@ -1,6 +1,7 @@
 import { Studio } from "@/components/Studio";
 import { TAKES, PRESENTER_LABELS } from "@/lib/takes";
-import { getModelAvailability, getModelPath, isConfigured } from "@/lib/higgsfield";
+import { checkPathAvailability, isConfigured } from "@/lib/higgsfield";
+import { ANIMATION_MODELS, BACKDROP_MODEL, DEFAULT_ANIMATION_MODEL } from "@/lib/models";
 
 export const dynamic = "force-dynamic";
 
@@ -17,15 +18,11 @@ export default async function Page() {
     posterUrl: t.posterUrl,
     durationSeconds: t.durationSeconds,
   }));
-  const availability = await getModelAvailability();
-  return (
-    <Studio
-      takes={takes}
-      configured={isConfigured()}
-      model={getModelPath()}
-      modelAvailable={availability.configuredModelAvailable}
-      videoModels={availability.videoModels}
-      totalModels={availability.totalModels}
-    />
-  );
+  const models = Object.values(ANIMATION_MODELS).map((m) => ({ id: m.id, label: m.label, path: m.path, speech: m.speech, durations: m.durations, defaultDuration: m.defaultDuration }));
+  const configured = isConfigured();
+  const [anim, back] = configured
+    ? await Promise.all([checkPathAvailability(ANIMATION_MODELS[DEFAULT_ANIMATION_MODEL].path), checkPathAvailability(BACKDROP_MODEL.path)])
+    : [null, null];
+  const modelAvailable = anim && back ? (anim.available === false || back.available === false ? false : anim.available && back.available ? true : null) : null;
+  return <Studio takes={takes} models={models} defaultModel={DEFAULT_ANIMATION_MODEL} configured={configured} modelAvailable={modelAvailable} backdropModel={BACKDROP_MODEL.path} />;
 }

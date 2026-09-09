@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { HiggsfieldError, getModelPath, isConfigured, listModels } from "@/lib/higgsfield";
+import { HiggsfieldError, isConfigured, listModels, resolveBase } from "@/lib/higgsfield";
 import type { ApiErrorResponse } from "@/lib/api-types";
 
 export const dynamic = "force-dynamic";
@@ -23,9 +23,10 @@ export async function GET(req: Request) {
     const v = url.searchParams.get(k);
     if (v && /^[A-Za-z0-9_.,-]{1,40}$/.test(v)) qs.set(k, v);
   }
+  const base = url.searchParams.get("base") ?? undefined;
   try {
-    const models = await listModels(qs.toString());
-    return NextResponse.json({ configuredModel: getModelPath(), query: qs.toString() || null, models }, { headers: { "Cache-Control": "no-store" } });
+    const models = await listModels(qs.toString(), base);
+    return NextResponse.json({ base: resolveBase(base), query: qs.toString() || null, models }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     if (err instanceof HiggsfieldError) {
       return NextResponse.json({ error: err.message, code: err.code } satisfies ApiErrorResponse, { status: err.httpStatus, headers: { "Cache-Control": "no-store" } });

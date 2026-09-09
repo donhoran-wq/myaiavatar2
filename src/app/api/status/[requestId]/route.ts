@@ -15,17 +15,19 @@ function error(status: number, body: ApiErrorResponse) {
 export function toStatusResponse(requestId: string, s: HiggsfieldRequestStatus, mock: boolean): StatusResponse {
   const terminal = TERMINAL_STATUSES.has(s.status);
   const videoUrl = s.status === "completed" && s.video?.url ? s.video.url : null;
+  const imageUrl = s.status === "completed" && s.images?.[0]?.url ? s.images[0].url : null;
   let errorMessage: string | null = null;
   if (s.status === "failed") errorMessage = s.error || "Generation failed. Credits for failed requests are not charged.";
   else if (s.status === "nsfw") errorMessage = "Generation was rejected by content moderation (NSFW). Credits are not charged.";
   else if (s.status === "canceled") errorMessage = "The request was canceled.";
-  else if (s.status === "completed" && !videoUrl) errorMessage = "Completed, but no video URL was returned.";
+  else if (s.status === "completed" && !videoUrl && !imageUrl) errorMessage = "Completed, but no output URL was returned.";
   return {
     requestId,
     status: s.status,
     mock,
     terminal,
     videoUrl,
+    imageUrl,
     downloadUrl: videoUrl ? `/api/download/${encodeURIComponent(requestId)}` : null,
     error: errorMessage,
     checkedAt: new Date().toISOString(),
