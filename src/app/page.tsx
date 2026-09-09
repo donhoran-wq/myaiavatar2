@@ -1,10 +1,10 @@
 import { Studio } from "@/components/Studio";
 import { TAKES, PRESENTER_LABELS } from "@/lib/takes";
-import { getModelPath, isConfigured } from "@/lib/higgsfield";
+import { getModelAvailability, getModelPath, isConfigured } from "@/lib/higgsfield";
 
 export const dynamic = "force-dynamic";
 
-export default function Page() {
+export default async function Page() {
   const takes = TAKES.map((t) => ({
     id: t.id,
     label: t.label,
@@ -17,5 +17,15 @@ export default function Page() {
     posterUrl: t.posterUrl,
     durationSeconds: t.durationSeconds,
   }));
-  return <Studio takes={takes} configured={isConfigured()} model={getModelPath()} />;
+  const availability = await getModelAvailability();
+  return (
+    <Studio
+      takes={takes}
+      configured={isConfigured()}
+      model={getModelPath()}
+      modelAvailable={availability.configuredModelAvailable}
+      videoModels={availability.videoModels}
+      totalModels={availability.totalModels}
+    />
+  );
 }

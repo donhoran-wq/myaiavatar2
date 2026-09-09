@@ -65,6 +65,7 @@ export type HiggsfieldErrorCode =
   | "not_configured"
   | "unauthorized"
   | "not_found"
+  | "model_not_found"
   | "bad_request"
   | "rate_limited"
   | "upstream"
@@ -127,6 +128,13 @@ function mapHttpError(res: Response, detail: string): HiggsfieldError {
       "unauthorized",
     );
   }
+  if (res.status === 404 && /model_not_found/i.test(detail)) {
+    return new HiggsfieldError(
+      `The configured model "${getModelPath()}" is not available on this Higgsfield account (model_not_found). Check GET /api/models for the models your API key can use, or set HIGGSFIELD_MODEL to one of them.`,
+      404,
+      "model_not_found",
+    );
+  }
   if (res.status === 404) return new HiggsfieldError(`Higgsfield could not find that request: ${detail}`, 404, "not_found");
   if (res.status === 402) return new HiggsfieldError(`Higgsfield reported insufficient credits: ${detail}`, 402, "bad_request");
   if (res.status === 422 || res.status === 400) return new HiggsfieldError(`Higgsfield rejected the request: ${detail}`, 400, "bad_request");
@@ -173,10 +181,73 @@ export interface ReferenceToVideoInput {
 
 /** Submit an asynchronous generation request. Returns the initial request status. */
 export async function submitGeneration(input: ReferenceToVideoInput): Promise<HiggsfieldRequestStatus> {
+  availabilityCache = null; // a submission is the ground truth; re-read the catalog next time
   return request<HiggsfieldRequestStatus>(getModelPath(), {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+/** List the models available to this account (GET /models). Shape is passed through as returned by Higgsfield. */
+export async function listModels(query = ""): Promise<unknown> {
+  return request<unknown>(query ? `models?${query}` : "models", { method: "GET" });
+}
+
+export interface ModelAvailability {
+  /** true/false when the catalog could be read; null when it could not (network, auth, not configured). */
+  configuredModelAvailable: boolean | null;
+  configuredModel: string;
+  videoModels: string[];
+  totalModels: number | null;
+  error: string | null;
+}
+
+interface CatalogItem {
+  slug?: string;
+  output_type?: string;
+  operation_type?: string[];
+}
+
+let availabilityCache: { at: number; value: ModelAvailability } | null = null;
+const AVAILABILITY_TTL_MS = 60_000;
+
+/**
+ * Reads the account's model catalog and reports whether the configured model
+ * can be used and which video models exist. Cached for a minute. Never throws.
+ */
+export async function getModelAvailability(): Promise<ModelAvailability> {
+  const configuredModel = getModelPath();
+  if (availabilityCache && Date.now() - availabilityCache.at < AVAILABILITY_TTL_MS && availabilityCache.value.configuredModel === configuredModel) {
+    return availabilityCache.value;
+  }
+  let value: ModelAvailability;
+  if (!isConfigured()) {
+    value = { configuredModelAvailable: null, configuredModel, videoModels: [], totalModels: null, error: "not_configured" };
+  } else {
+    try {
+      const raw = (await listModels("size=100")) as { total?: number; items?: CatalogItem[] };
+      const items = Array.isArray(raw?.items) ? raw.items : [];
+      const slugs = items.map((m) => (m.slug ?? "").replace(/^\/+/, ""));
+      const videoModels = items.filter((m) => m.output_type === "video" || (m.operation_type ?? []).some((o) => /video/i.test(o))).map((m) => m.slug ?? "");
+      value = {
+        configuredModelAvailable: slugs.includes(configuredModel),
+        configuredModel,
+        videoModels,
+        totalModels: typeof raw?.total === "number" ? raw.total : items.length,
+        error: null,
+      };
+    } catch (err) {
+      value = {
+        configuredModelAvailable: null,
+        configuredModel,
+        videoModels: [],
+        totalModels: null,
+        error: err instanceof HiggsfieldError ? err.code : "unknown",
+      };
+    }
+  }
+  availabilityCache = { at: Date.now(), value };
+  return value;
 }
 
 /** Poll the status of a request. */

@@ -35,11 +35,14 @@ npm run dev
 
 | Route | Description |
 | --- | --- |
-| `GET /api/health` | `{ higgsfieldConfigured, model, takes }` |
+| `GET /api/health` | `{ higgsfieldConfigured, model, modelAvailable, videoModels, totalModels, takes }` |
+| `GET /api/models` | The account's model catalog from `GET https://api.higgsfield.ai/models` (optional `size`, `output_type`, `operation_type` filters) |
 | `GET /api/takes` | Take catalogue (no credentials involved) |
 | `POST /api/generate` | Body: `{ mediaId, scene, dialogue, duration?, resolution?, aspectRatio?, mock? }` → `202 { requestId, status, mock, model, prompt }` |
 | `GET /api/status/:requestId` | `{ status, terminal, videoUrl, downloadUrl, error }` |
 | `GET /api/download/:requestId` | Streams the finished MP4 |
+
+**Model availability.** Higgsfield exposes models per account. On load the app reads `GET /models` with the server key and, if the configured model is not in the catalog, shows a banner and disables real generations (dry run still works). A submission that Higgsfield rejects with `model_not_found` returns `404 { code: "model_not_found" }` with the same explanation. Use `GET /api/models` to see what the key can use and set `HIGGSFIELD_MODEL` accordingly.
 
 Validation errors return `400 { error, fieldErrors }`. Missing server credentials return `503 { code: "not_configured" }`. Rejected credentials return `502 { code: "unauthorized" }`.
 

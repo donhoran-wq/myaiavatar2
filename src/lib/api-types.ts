@@ -33,5 +33,9 @@ export interface HealthResponse {
   ok: true;
   higgsfieldConfigured: boolean;
   model: string;
+  /** true/false when the account catalog could be read; null when unknown. */
+  modelAvailable: boolean | null;
+  videoModels: string[];
+  totalModels: number | null;
   takes: number;
 }

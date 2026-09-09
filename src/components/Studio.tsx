@@ -62,7 +62,22 @@ function saveJob(job: Job | null) {
   }
 }
 
-export function Studio({ takes, configured, model }: { takes: TakeCardData[]; configured: boolean; model: string }) {
+export function Studio({
+  takes,
+  configured,
+  model,
+  modelAvailable,
+  videoModels,
+  totalModels,
+}: {
+  takes: TakeCardData[];
+  configured: boolean;
+  model: string;
+  modelAvailable: boolean | null;
+  videoModels: string[];
+  totalModels: number | null;
+}) {
+  const realDisabled = !configured || modelAvailable === false;
   const [selectedId, setSelectedId] = useState<string>(takes[0]?.id ?? "");
   const [presenterFilter, setPresenterFilter] = useState<string>("all");
   const [outfitFilter, setOutfitFilter] = useState<string>("all");
@@ -71,7 +86,7 @@ export function Studio({ takes, configured, model }: { takes: TakeCardData[]; co
   const [duration, setDuration] = useState<"4" | "6" | "8">("8");
   const [resolution, setResolution] = useState<"720" | "1080">("720");
   const [aspectRatio, setAspectRatio] = useState<"16:9" | "9:16">("16:9");
-  const [dryRun, setDryRun] = useState(!configured);
+  const [dryRun, setDryRun] = useState(realDisabled);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -260,9 +275,13 @@ export function Studio({ takes, configured, model }: { takes: TakeCardData[]; co
           <p className="mt-1 text-sm text-muted">Pick a green-screen take, describe the new scene, write the dialogue, and generate through Higgsfield.</p>
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${configured ? "border-success/40 text-success" : "border-warning/50 text-warning"}`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${configured ? "bg-success" : "bg-warning"}`} />
-            {configured ? "Higgsfield API connected" : "Higgsfield credentials missing"}
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+              !configured ? "border-warning/50 text-warning" : modelAvailable === false ? "border-danger/50 text-danger" : "border-success/40 text-success"
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${!configured ? "bg-warning" : modelAvailable === false ? "bg-danger" : "bg-success"}`} />
+            {!configured ? "Higgsfield credentials missing" : modelAvailable === false ? "API connected · model not enabled" : "Higgsfield API connected"}
           </span>
           <span className="rounded-full border border-border px-2.5 py-1 font-mono text-muted" title="Model path">
             {model}
@@ -273,6 +292,22 @@ export function Studio({ takes, configured, model }: { takes: TakeCardData[]; co
       {!configured && (
         <div className="mb-6 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
           Server credentials are not set. Real generations are disabled until <code className="font-mono">higgsfieldapi</code> and <code className="font-mono">higgsfieldkey</code> are configured. Dry-run mode still works.
+        </div>
+      )}
+      {configured && modelAvailable === false && (
+        <div className="mb-6 rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+          <p className="font-medium">
+            The model <code className="font-mono">{model}</code> is not enabled for this Higgsfield API key.
+          </p>
+          <p className="mt-1 text-danger/90">
+            The account catalog lists {totalModels ?? 0} model{totalModels === 1 ? "" : "s"} and {videoModels.length} video model{videoModels.length === 1 ? "" : "s"}
+            {videoModels.length > 0 ? `: ${videoModels.join(", ")}` : ""}. Real generations are disabled until Higgsfield enables a video model for this key (or <code className="font-mono">HIGGSFIELD_MODEL</code> is set to an available one). Dry-run mode still works.
+          </p>
+        </div>
+      )}
+      {configured && modelAvailable === null && (
+        <div className="mb-6 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+          Could not read the account model catalog just now, so model availability is unverified. Submissions will still be validated by Higgsfield.
         </div>
       )}
 
@@ -398,7 +433,7 @@ export function Studio({ takes, configured, model }: { takes: TakeCardData[]; co
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">3. Generate</h2>
 
             <label className="flex cursor-pointer items-start gap-2 text-sm">
-              <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} className="mt-0.5" />
+              <input type="checkbox" checked={dryRun} disabled={realDisabled} onChange={(e) => setDryRun(e.target.checked)} className="mt-0.5" />
               <span>
                 <span className="font-medium">Dry run (mock, no credits)</span>
                 <span className="block text-xs text-muted">Exercises submit → poll → download without calling Higgsfield. The result is the original take, clearly labelled as a mock.</span>
