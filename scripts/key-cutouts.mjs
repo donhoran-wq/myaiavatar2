@@ -25,17 +25,47 @@ for (const f of files) {
   // fully opaque once dominance drops well below it.
   const hi = bgDom * 0.55; // >= this => transparent
   const lo = bgDom * 0.18; // <= this => opaque
-  let opaque = 0;
-  for (let i = 0; i < data.length; i += channels) {
+  // Pass 1: raw alpha from green dominance.
+  const alpha = new Float32Array(width * height);
+  for (let p = 0, i = 0; i < data.length; i += channels, p++) {
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const dom = g - Math.max(r, b);
     let a = 1;
     if (dom >= hi) a = 0;
     else if (dom > lo) a = 1 - (dom - lo) / (hi - lo);
-    // Despill: clamp green to the max of red/blue in semi-transparent and edge pixels.
-    if (a < 1 || dom > lo * 0.5) {
+    alpha[p] = a;
+  }
+  // Pass 2: erode the matte by ~1.5 px (take the minimum alpha in a 3x3
+  // neighbourhood, twice) so the green-contaminated rim is cut away.
+  let matte = alpha;
+  for (let pass = 0; pass < 2; pass++) {
+    const dst = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let m = 1;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = Math.min(height - 1, Math.max(0, y + dy));
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = Math.min(width - 1, Math.max(0, x + dx));
+            const v = matte[yy * width + xx];
+            if (v < m) m = v;
+          }
+        }
+        dst[y * width + x] = m;
+      }
+    }
+    matte = dst;
+  }
+  // Pass 3: despill everything that still carries green dominance, hardest at the edges.
+  let opaque = 0;
+  for (let p = 0, i = 0; i < data.length; i += channels, p++) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const dom = g - Math.max(r, b);
+    const a = matte[p];
+    if (dom > 0 && (a < 1 || dom > lo * 0.3)) {
       const m = Math.max(r, b);
-      if (g > m) data[i + 1] = Math.round(m + (g - m) * 0.25);
+      const keep = a < 1 ? 0 : 0.15; // edge pixels lose all excess green; interior keeps a little
+      data[i + 1] = Math.round(m + (g - m) * keep);
     }
     data[i + 3] = Math.round(a * 255);
     if (a > 0.5) opaque++;
