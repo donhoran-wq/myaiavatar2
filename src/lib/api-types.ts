@@ -5,7 +5,10 @@ export type JobStatus = "queued" | "in_progress" | "completed" | "failed" | "nsf
 /** Pipeline stages. Mock runs are single-stage; real runs are backdrop → video. */
 export type Stage = "mock" | "backdrop" | "video";
 
+export type Engine = "higgsfield" | "heygen";
+
 export interface PipelineParams {
+  engine: Engine;
   mediaId: string;
   scene: string;
   dialogue: string;
@@ -13,12 +16,17 @@ export interface PipelineParams {
   aspectRatio: "16:9" | "9:16";
   model: string;
   backdropPrompt?: string | null;
+  /** HeyGen only: animate the composited take ("image") or render one of the account's own looks ("look"). */
+  heygenSource?: "image" | "look";
+  heygenLookId?: string | null;
+  heygenVoiceId?: string | null;
 }
 
 export interface GenerateResponse {
   requestId: string;
   status: JobStatus;
   stage: Stage;
+  engine: Engine;
   mock: boolean;
   model: string;
   modelLabel: string;
@@ -40,9 +48,12 @@ export interface StatusResponse {
   downloadUrl: string | null;
   error: string | null;
   checkedAt: string;
+  /** HeyGen reports duration on completion. */
+  durationSeconds?: number | null;
 }
 
 export interface EstimateResponse {
+  engine: Engine;
   model: string;
   modelLabel: string;
   duration: number;
@@ -52,6 +63,9 @@ export interface EstimateResponse {
   backdropUsd: string;
   totalCredits: string;
   totalUsd: string;
+  /** HeyGen: no per-request estimate endpoint; wallet balance and billing note instead. */
+  note?: string;
+  walletUsd?: number | null;
 }
 
 export interface ApiErrorResponse {
@@ -63,10 +77,27 @@ export interface ApiErrorResponse {
 export interface HealthResponse {
   ok: true;
   higgsfieldConfigured: boolean;
+  heygenConfigured: boolean;
   model: string;
   modelPath: string;
   /** true/false when the model path could be probed; null when unknown. */
   modelAvailable: boolean | null;
   backdropAvailable: boolean | null;
   takes: number;
+}
+
+export interface VoiceOption {
+  id: string;
+  name: string;
+  language: string;
+  gender: string;
+  previewUrl: string | null;
+  type: "public" | "private";
+}
+
+export interface LookOption {
+  id: string;
+  name: string;
+  previewUrl: string | null;
+  defaultVoiceId: string | null;
 }

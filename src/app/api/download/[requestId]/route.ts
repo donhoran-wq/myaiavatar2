@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { HiggsfieldError, getRequestStatus, isConfigured } from "@/lib/higgsfield";
+import { HeygenError, fromHeygenRequestId, getVideo, isHeygenConfigured, isHeygenRequestId } from "@/lib/heygen";
 import { isMockRequestId, mockStatus } from "@/lib/mock";
 import type { ApiErrorResponse } from "@/lib/api-types";
 
@@ -14,8 +15,8 @@ function error(status: number, body: ApiErrorResponse) {
 
 /**
  * Streams the finished MP4 back to the browser with a download filename. The
- * video URL is re-read from the request status server-side, so the client can
- * never make this route proxy an arbitrary URL.
+ * video URL is re-read from the provider server-side, so the client can never
+ * make this route proxy an arbitrary URL.
  */
 export async function GET(_req: Request, ctx: { params: Promise<{ requestId: string }> }) {
   const { requestId } = await ctx.params;
@@ -23,18 +24,23 @@ export async function GET(_req: Request, ctx: { params: Promise<{ requestId: str
 
   let videoUrl: string | null = null;
   const mock = isMockRequestId(requestId);
+  const heygen = isHeygenRequestId(requestId);
   try {
     if (mock) {
       const s = mockStatus(requestId);
       if (!s) return error(404, { error: "Unknown mock request.", code: "not_found" });
       videoUrl = s.status === "completed" ? (s.video?.url ?? null) : null;
+    } else if (heygen) {
+      if (!isHeygenConfigured()) return error(503, { error: "HeyGen is not configured on the server.", code: "heygen_not_configured" });
+      const v = await getVideo(fromHeygenRequestId(requestId));
+      videoUrl = v.status === "completed" ? (v.video_url ?? null) : null;
     } else {
       if (!isConfigured()) return error(503, { error: "Higgsfield credentials are not configured on the server.", code: "not_configured" });
       const s = await getRequestStatus(requestId);
       videoUrl = s.status === "completed" ? (s.video?.url ?? null) : null;
     }
   } catch (err) {
-    if (err instanceof HiggsfieldError) return error(err.httpStatus, { error: err.message, code: err.code });
+    if (err instanceof HiggsfieldError || err instanceof HeygenError) return error(err.httpStatus, { error: err.message, code: err.code });
     return error(500, { error: "Unexpected server error while preparing the download.", code: "internal" });
   }
 
@@ -44,14 +50,14 @@ export async function GET(_req: Request, ctx: { params: Promise<{ requestId: str
   try {
     upstream = await fetch(videoUrl, { cache: "no-store" });
   } catch {
-    return error(502, { error: "Could not fetch the finished video from Higgsfield.", code: "network" });
+    return error(502, { error: "Could not fetch the finished video from the provider.", code: "network" });
   }
   if (!upstream.ok || !upstream.body) {
     return error(502, { error: `The video host returned HTTP ${upstream.status}.`, code: "upstream" });
   }
 
-  const shortId = (mock ? requestId.slice("mock-".length) : requestId).slice(0, 8);
-  const filename = `${mock ? "mock-" : "avatar-"}${shortId}.mp4`;
+  const shortId = (mock ? requestId.slice("mock-".length) : heygen ? fromHeygenRequestId(requestId) : requestId).slice(0, 8);
+  const filename = `${mock ? "mock-" : heygen ? "heygen-" : "avatar-"}${shortId}.mp4`;
   const headers = new Headers({
     "Content-Type": upstream.headers.get("content-type") || "video/mp4",
     "Content-Disposition": `attachment; filename="${filename}"`,

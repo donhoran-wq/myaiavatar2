@@ -4,8 +4,9 @@ import { getTake } from "@/lib/takes";
 import { buildBackdropPrompt } from "@/lib/pipeline";
 import { BACKDROP_MODEL, getAnimationModel } from "@/lib/models";
 import { HiggsfieldError, isConfigured, submitRaw } from "@/lib/higgsfield";
+import { isHeygenConfigured } from "@/lib/heygen";
 import { makeMockRequestId } from "@/lib/mock";
-import type { ApiErrorResponse, GenerateResponse } from "@/lib/api-types";
+import type { ApiErrorResponse, GenerateResponse, PipelineParams } from "@/lib/api-types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -16,8 +17,9 @@ function error(status: number, body: ApiErrorResponse) {
 
 /**
  * Stage 1 of a generation. Validates the request and, for real runs, submits
- * the backdrop (scene plate) image request. The client polls it and then calls
- * /api/generate/animate to composite the presenter and start the video.
+ * the backdrop (scene plate) image request to Higgsfield. Both engines use it:
+ * Higgsfield animates the composited frame; HeyGen animates it (image mode) or
+ * uses the plate as the background behind one of the account's looks.
  */
 export async function POST(req: Request) {
   let json: unknown;
@@ -34,17 +36,32 @@ export async function POST(req: Request) {
   const input = result.value;
   const take = getTake(input.mediaId)!;
   const model = getAnimationModel(input.model);
-  const pipeline = { mediaId: take.id, scene: input.scene, dialogue: input.dialogue, duration: input.duration, aspectRatio: input.aspectRatio, model: model.id, backdropPrompt: input.backdropPrompt };
+  const pipeline: PipelineParams = {
+    engine: input.engine,
+    mediaId: take.id,
+    scene: input.scene,
+    dialogue: input.dialogue,
+    duration: input.duration,
+    aspectRatio: input.aspectRatio,
+    model: model.id,
+    backdropPrompt: input.backdropPrompt,
+    heygenSource: input.heygenSource,
+    heygenLookId: input.heygenLookId,
+    heygenVoiceId: input.heygenVoiceId,
+  };
   const submittedAt = new Date().toISOString();
+  const videoModelLabel = input.engine === "heygen" ? (input.heygenSource === "look" ? "HeyGen avatar look (Avatar IV)" : "HeyGen image-to-video") : model.label;
+  const videoModelPath = input.engine === "heygen" ? "heygen:v3/videos" : model.path;
 
   if (input.mock) {
     const body: GenerateResponse = {
       requestId: makeMockRequestId(take.id),
       status: "queued",
       stage: "mock",
+      engine: input.engine,
       mock: true,
-      model: `mock (would use ${BACKDROP_MODEL.path} then ${model.path})`,
-      modelLabel: model.label,
+      model: `mock (would use ${BACKDROP_MODEL.path} then ${videoModelPath})`,
+      modelLabel: videoModelLabel,
       prompt: buildBackdropPrompt(input.scene, input.backdropPrompt ?? undefined),
       take: { id: take.id, label: take.label, outfit: take.outfit },
       pipeline,
@@ -60,6 +77,9 @@ export async function POST(req: Request) {
       code: "not_configured",
     });
   }
+  if (input.engine === "heygen" && !isHeygenConfigured()) {
+    return error(503, { error: "HeyGen is not configured on the server. Set the HEYGEN_API_KEY environment variable and redeploy.", code: "heygen_not_configured" });
+  }
 
   try {
     const prompt = buildBackdropPrompt(input.scene, input.backdropPrompt ?? undefined);
@@ -71,6 +91,7 @@ export async function POST(req: Request) {
       requestId: submitted.request_id,
       status: submitted.status ?? "queued",
       stage: "backdrop",
+      engine: input.engine,
       mock: false,
       model: BACKDROP_MODEL.path,
       modelLabel: BACKDROP_MODEL.label,

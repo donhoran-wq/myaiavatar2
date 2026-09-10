@@ -1,6 +1,7 @@
 import { Studio } from "@/components/Studio";
 import { TAKES, PRESENTER_LABELS } from "@/lib/takes";
 import { checkPathAvailability, isConfigured } from "@/lib/higgsfield";
+import { isHeygenConfigured } from "@/lib/heygen";
 import { ANIMATION_MODELS, BACKDROP_MODEL, DEFAULT_ANIMATION_MODEL } from "@/lib/models";
 
 export const dynamic = "force-dynamic";
@@ -24,5 +25,15 @@ export default async function Page() {
     ? await Promise.all([checkPathAvailability(ANIMATION_MODELS[DEFAULT_ANIMATION_MODEL].path), checkPathAvailability(BACKDROP_MODEL.path)])
     : [null, null];
   const modelAvailable = anim && back ? (anim.available === false || back.available === false ? false : anim.available && back.available ? true : null) : null;
-  return <Studio takes={takes} models={models} defaultModel={DEFAULT_ANIMATION_MODEL} configured={configured} modelAvailable={modelAvailable} backdropModel={BACKDROP_MODEL.path} />;
+  return (
+    <Studio
+      takes={takes}
+      models={models}
+      defaultModel={DEFAULT_ANIMATION_MODEL}
+      configured={configured}
+      heygenConfigured={isHeygenConfigured()}
+      modelAvailable={modelAvailable}
+      backdropModel={BACKDROP_MODEL.path}
+    />
+  );
 }

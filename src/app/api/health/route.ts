@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { checkPathAvailability, isConfigured } from "@/lib/higgsfield";
+import { isHeygenConfigured } from "@/lib/heygen";
 import { BACKDROP_MODEL, getAnimationModel } from "@/lib/models";
 import { TAKES } from "@/lib/takes";
 import type { HealthResponse } from "@/lib/api-types";
@@ -13,6 +14,7 @@ export async function GET() {
   const body: HealthResponse = {
     ok: true,
     higgsfieldConfigured: isConfigured(),
+    heygenConfigured: isHeygenConfigured(),
     model: model.id,
     modelPath: model.path,
     modelAvailable: anim.available,
