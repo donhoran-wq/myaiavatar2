@@ -58,8 +58,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ requestId: str
 
   const shortId = (mock ? requestId.slice("mock-".length) : heygen ? fromHeygenRequestId(requestId) : requestId).slice(0, 8);
   const filename = `${mock ? "mock-" : heygen ? "heygen-" : "avatar-"}${shortId}.mp4`;
+  const upstreamType = upstream.headers.get("content-type") || "";
   const headers = new Headers({
-    "Content-Type": upstream.headers.get("content-type") || "video/mp4",
+    // HeyGen serves MP4s as application/octet-stream; normalise so browsers treat it as video.
+    "Content-Type": upstreamType.startsWith("video/") ? upstreamType : "video/mp4",
     "Content-Disposition": `attachment; filename="${filename}"`,
     "Cache-Control": "private, no-store",
   });

@@ -11,6 +11,7 @@ Flow: pick a take → choose outfit / presenter → describe the replacement bac
   1. `POST /api/generate` validates the input and submits a **backdrop plate** for the described scene to Soul 2 (`higgsfield-ai/soul/v2/standard`).
   2. When that completes, the client calls `POST /api/generate/animate`. The server composites the presenter cutout (the selected take keyed out of its green screen, hosted as a transparent PNG) over the backdrop with sharp, uploads the frame through the documented Files API (`POST /files/generate-upload-url` + presigned PUT), and submits the video model with the dialogue in the prompt. Default video model: **Kling 3.0 Pro** (`kling-video/v3.0/pro/image-to-video`, `sound: on`), which speaks the quoted dialogue with lip-sync; Kling 2.6 Pro and Hailuo 2.3 Pro (motion only) are selectable in `src/lib/models.ts`.
 - **Model availability** is verified live by posting an empty body to each model path: a validation error proves the model is enabled, while `model_not_found`, `model_disabled` or `model_blocked` prove it is not. The account's `GET /models` catalog only lists three image models and is not authoritative.
+- **Long-form engine (HeyGen).** Choosing the "Long-form" engine keeps the Higgsfield backdrop stage but sends the video to HeyGen's v3 API (`POST /v3/videos`, `x-api-key`), which is audio-driven lip-sync: the script is spoken exactly, up to 5,000 characters / 30 minutes per request, billed per minute from the HeyGen wallet. Two sources: the composited take (`type: "image"`, full frame kept) or one of the account's own HeyGen looks (`type: "avatar"`, Avatar IV engine, backdrop passed as the background image). Voices come from `GET /v3/voices` with the account's private (cloned) voices listed first; a look's default voice is used unless another is chosen. HeyGen request IDs are prefixed `hg-` so the shared status and download routes can route them (`GET /v3/videos/{id}`).
 - **Duration** is capped by the models Higgsfield enables for this key: Kling 3.0 Pro accepts 3–15 s (offered as 5/8/10/12/15), Kling 2.6 Pro 5/10 s, Hailuo 2.3 Pro 6/10 s. Longer clips would need two generations stitched together, which the API does not offer.
 - **Cost** is estimated before confirmation through Higgsfield's `POST /estimate/{model}` endpoint and shown in the confirmation dialog.
 - **Status** is polled by the browser through `GET /api/status/:requestId`, which calls the documented `GET /requests/{request_id}/status` endpoint and normalises `queued | in_progress | completed | failed | nsfw | canceled`.
@@ -26,6 +27,7 @@ Credentials are read only on the server (`src/lib/higgsfield.ts`), are never sen
 | `higgsfieldapi` | Higgsfield API key ID (Vercel production name) |
 | `higgsfieldkey` | Higgsfield API key secret (Vercel production name) |
 | `HIGGSFIELD_API_KEY_ID` / `HIGGSFIELD_API_KEY_SECRET` | Optional uppercase aliases |
+| `HEYGEN_API_KEY` | HeyGen v3 API key (enables the long-form engine) |
 | `HIGGSFIELD_API_BASE` | Optional: `api` (default, api.higgsfield.ai) or `platform` (platform.higgsfield.ai); both accept the same key |
 
 ## Local development
@@ -44,7 +46,9 @@ npm run dev
 | `GET /api/models` | The account's model catalog from `GET /models` (incomplete on Higgsfield's side; see probe) |
 | `GET /api/models/probe?path=` | Diagnostic: does this key have access to a model path (empty body, no credits) |
 | `GET /api/takes` | Take catalogue (no credentials involved) |
-| `GET /api/estimate?model=&duration=&aspectRatio=` | Credit estimate for backdrop + video from Higgsfield's `/estimate/{model}` |
+| `GET /api/heygen/voices` | HeyGen voices (private first, then English public) |
+| `GET /api/heygen/looks` | The account's own HeyGen avatar looks |
+| `GET /api/estimate?engine=&model=&duration=&aspectRatio=` | Credit estimate for backdrop + video from Higgsfield's `/estimate/{model}` |
 | `POST /api/generate` | Body: `{ mediaId, scene, dialogue, duration?, aspectRatio?, model?, mock? }` → `202 { requestId, stage: "backdrop" \| "mock", pipeline, ... }` |
 | `POST /api/generate/animate` | Body: `{ backdropRequestId, ...pipeline }` → composites + uploads the frame → `202 { requestId, stage: "video", compositeUrl }` |
 | `GET /api/status/:requestId` | `{ status, terminal, videoUrl, imageUrl, downloadUrl, error }` |
